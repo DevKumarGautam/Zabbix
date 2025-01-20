@@ -1,0 +1,141 @@
+---
+- name: Download Zabbix repository
+  ansible.builtin.get_url:
+    url: https://repo.zabbix.com/zabbix/7.2/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.2+ubuntu24.04_all.deb
+    dest: /tmp/zabbix-release_latest_7.2+ubuntu24.04_all.deb
+
+- name: Install Zabbix repository package
+  ansible.builtin.apt:
+    deb: /tmp/zabbix-release_latest_7.2+ubuntu24.04_all.deb
+
+- name: Update APT cache
+  ansible.builtin.apt:
+    update_cache: yes
+
+- name: Install Zabbix server, frontend, and agent
+  ansible.builtin.apt:
+    name:
+      - zabbix-server-mysql
+      - zabbix-frontend-php
+      - zabbix-apache-conf
+      - zabbix-sql-scripts
+      - zabbix-agent
+    state: present
+    update_cache: yes
+
+- name: Clean up downloaded repository package
+  ansible.builtin.file:
+    path: /tmp/zabbix-release_latest_7.2+ubuntu24.04_all.deb
+    state: absent
+
+###
+
+- name: Install MySQL server
+  ansible.builtin.apt:
+    name: mysql-server
+    state: present
+    update_cache: yes
+
+- name: Ensure MySQL service is started and enabled
+  ansible.builtin.service:
+    name: mysql
+    state: started
+    enabled: yes
+
+- name: Ensure MySQL is installed and running
+  ansible.builtin.service:
+    name: mysql
+    state: started
+    enabled: yes
+
+
+- name: Create database
+  shell: |
+    mysql -u root -e "CREATE DATABASE IF NOT EXISTS zabbix;"
+
+
+
+
+
+
+
+
+
+# - name: Create Zabbix database
+#   ansible.builtin.mysql_db:
+#     name: zabbix
+#     encoding: utf8mb4
+#     collation: utf8mb4_bin
+#     state: present
+#     login_user: root
+#     login_password: "{{ mysql_root_password }}"
+
+# - name: Create Zabbix database user
+#   ansible.builtin.mysql_user:
+#     name: zabbix
+#     password: "{{ zabbix_db_password }}"
+#     host: localhost
+#     priv: 'zabbix.*:ALL'
+#     state: present
+#     login_user: root
+#     login_password: "{{ mysql_root_password }}"
+
+# - name: Create Zabbix database user
+#   shell: |
+#     mysql -u root -e "CREATE USER IF NOT EXISTS 'zabbix_user'@'%' IDENTIFIED BY 'strong_password'; GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix_user'@'%'; FLUSH PRIVILEGES;"
+
+- name: Create Zabbix database user with password
+  shell: |
+    mysql -u root -e "
+    CREATE USER IF NOT EXISTS 'zabbix_user'@'%' IDENTIFIED BY '{{ zabbix_db_password }}';
+    GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix_user'@'%';
+    FLUSH PRIVILEGES;"
+
+
+
+- name: Set log_bin_trust_function_creators to 1
+  ansible.builtin.command:
+    cmd: "mysql -uroot -p{{ mysql_root_password }} -e 'SET GLOBAL log_bin_trust_function_creators = 1;'"
+
+# - name: Import initial Zabbix schema
+#   ansible.builtin.command:
+#     cmd: "zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p{{ zabbix_db_password }} zabbix"
+
+# - name: Import initial Zabbix schema
+#   shell: |
+#     zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix_user -p'your_secure_password' zabbix
+
+- name: Check if the 'role' table exists in the database
+  shell: |
+    mysql -uzabbix_user -p'{{ zabbix_db_password }}' -e "USE zabbix; SHOW TABLES LIKE 'role';" | grep -w "role"
+  register: role_table_check
+  ignore_errors: yes
+
+- name: Import initial Zabbix schema if 'role' table does not exist
+  shell: |
+    zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix_user -p'{{ zabbix_db_password }}' zabbix
+  when: role_table_check.stdout == ""
+
+
+
+
+
+- name: Disable log_bin_trust_function_creators
+  ansible.builtin.command:
+    cmd: "mysql -uroot -p{{ mysql_root_password }} -e 'SET GLOBAL log_bin_trust_function_creators = 0;'"
+
+- name: Configure database for Zabbix server
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_server.conf
+    regexp: '^DBPassword='
+    line: "DBPassword={{ zabbix_db_password }}" 
+    state: present
+
+- name: Start and enable Zabbix server and agent
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  loop:
+    - zabbix-server
+    - zabbix-agent
