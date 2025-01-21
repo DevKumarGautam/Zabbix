@@ -1,6 +1,6 @@
 ---
 - name: Tests Zabbix role
-  hosts: remote
+  hosts: all
   gather_facts: yes
   become: true
   ignore_errors: true
